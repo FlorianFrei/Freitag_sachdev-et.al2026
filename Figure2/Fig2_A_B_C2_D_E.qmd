@@ -1,0 +1,657 @@
+---
+title: "Figure2"
+author: "Florian Freitag"
+format: html
+---
+# load packages and Data
+```{r}
+library(tidyverse)
+library(emmeans)
+library(lme4)
+library(DHARMa)
+library(ggrastr)
+```
+
+# functions 
+```{r}
+Plot_overview <- function(Trialless, orderby_Behv = "A2L", by_time = F, theme_smo = theme_minimal()) {
+  # either arrange the data by decreasing firing rate after 0 or by
+  if (by_time == F) {
+    ord <- Trialless %>%
+      filter(between(rel_time, 0, 0.1)) %>%
+      group_by(cluster_id2) %>%
+      filter(Behv == orderby_Behv) %>%
+      group_by(cluster_id2) %>%
+      summarise(ord = mean(Zscore)) %>%
+      arrange(ord) %>%
+      mutate(cluster_id2 = as.factor(cluster_id2)) %>%
+      pull(cluster_id2)
+  }
+  if (by_time == T) {
+    ord <- Trialless %>%
+      group_by(cluster_id2) %>%
+      filter(between(rel_time, -1, 1)) %>%
+      filter(Behv == orderby_Behv) %>%
+      group_by(cluster_id2) %>%
+      slice_max(Zscore, n = 1, with_ties = F) %>%
+      summarise(ord = rel_time) %>%
+      arrange(ord) %>%
+      distinct() %>%
+      mutate(cluster_id2 = as.factor(cluster_id2)) %>%
+      pull(cluster_id2)
+  }
+
+
+
+
+
+  # z score and filter
+  g1 <- Trialless %>%
+    filter(between(rel_time, -1, 1)) %>%
+    select(Behv, cluster_id2, Zscore, rel_time)
+
+
+
+  # apply order
+  g1$cluster_id2 <- factor(g1$cluster_id2, levels = ord)
+
+
+
+
+
+  # heatmap
+  map <- g1 %>%
+    mutate(Zscore = ifelse(Zscore > 8, 8, Zscore)) %>%
+    ggplot(aes(rel_time, cluster_id2, fill = Zscore)) +
+    rasterise(geom_tile(), dpi = 600) +
+    geom_vline(xintercept = 0, col = "grey", linetype = "dashed") +
+    facet_wrap(~Behv, scales = "free") +
+    scale_fill_gradientn(
+      colors = c("darkblue", "beige", "beige", "red"),
+      values = scales::rescale(c(min(g1$Zscore), -0.65, 0, 8)),
+      guide = guide_colorbar(
+        ticks = FALSE, # Remove intermediate ticks
+        draw.ulim = FALSE, # Remove top tick
+        draw.llim = FALSE,
+      ),
+      breaks = c(-2, 8)
+    ) +
+    theme_void() +
+    theme(
+      plot.margin = unit(c(0, 0.2, 0, 1), "lines"),
+      strip.text.x = element_text(size = 30)
+    ) +
+    labs(fill = "Z- scored FR")
+
+
+  # activity across all units
+  smo <- g1 %>%
+    group_by(Behv, rel_time) %>%
+    summarise(rate3 = mean(Zscore), sd = sd(Zscore), sem = sd / sqrt(n())) %>%
+    ggplot(aes(rel_time, rate3)) +
+    geom_line() +
+    geom_ribbon(aes(ymin = rate3 - sem, ymax = rate3 + sem), alpha = 0.4, fill = "black") +
+    geom_vline(xintercept = 0, col = "darkgrey", linetype = "dashed") +
+    facet_wrap(~Behv) +
+    theme_smo +
+    theme(
+      plot.margin = unit(c(0.1, 0.2, 0, 1), "lines"),
+      strip.background = element_blank(),
+      strip.text.x = element_blank(),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 20),
+      axis.line = element_line(color = "black"),
+      panel.grid = element_blank(),
+      panel.border = element_blank(),
+    ) +
+    xlab("time from stimulus") +
+    ylab("Z-scored FR")
+
+  # arrange plots
+  plot <- ggpubr::ggarrange(map, smo,
+    heights = c(2, 0.8), vjust = c(0.5, 0.5),
+    ncol = 1, nrow = 2, align = "v", common.legend = T, legend = "right"
+  )
+  plot
+}
+
+
+plot_single_unit_se <- function(Combcont, cluster_id, smoothness = 0.1) {
+  Datatemp <- Combcont %>%
+    filter(cluster_id2 == !!cluster_id) %>%
+    filter(event_count > 0, between(rel_time, -1, 1)) %>%
+    group_by(Behv) %>%
+    mutate(t2 = dense_rank(Trial))
+
+  dots <- Combcont %>%
+    filter(cluster_id2 == !!cluster_id) %>%
+    filter(event_count > 0, between(rel_time, -1, 1)) %>%
+    group_by(Behv) %>%
+    mutate(t2 = dense_rank(Trial))
+
+  avg <- Combcont %>%
+    filter(
+      cluster_id2 == !!cluster_id,
+      between(rel_time, -1, 1)
+    ) %>%
+    mutate(rel_time = round(rel_time / smoothness) * smoothness) %>%
+    group_by(Behv, Trial, rel_time) %>%
+    summarise(
+      count = sum(event_count),
+      .groups = "drop"
+    ) %>%
+    # across trials
+    group_by(Behv, rel_time) %>%
+    summarise(
+      mean_count = mean(count),
+      sd_count = sd(count),
+      n_trials = n(),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      rate    = mean_count / smoothness,
+      sd_rate = sd_count / smoothness,
+      se      = sd_rate / sqrt(n_trials)
+    )
+
+  if (nrow(Datatemp) == 0) {
+    stop("No data found for the specified cluster_id and filtering criteria.")
+  }
+
+
+  # Create the PSTH
+  map <- dots %>%
+    ggplot() +
+    geom_jitter(aes(rel_time, t2), height = 0.2, size = 0.5) +
+    facet_wrap(~Behv, scales = "free_y") +
+    theme_minimal() +
+    theme(
+      plot.margin = unit(c(0, 0.2, 0, 1), "lines"),
+      strip.text.x = element_text(size = 30),
+      axis.text = element_text(size = 10),
+      axis.title = element_text(size = 16, face = "bold")
+    ) +
+    scale_x_continuous(labels = NULL, breaks = NULL) +
+    scale_y_discrete(labels = NULL) +
+    labs(x = NULL) +
+    ylab("Trials")
+
+  # density plot
+  smo <- avg %>%
+    ggplot(aes(rel_time, rate)) +
+    geom_line() +
+    geom_ribbon(aes(ymin = rate - se, ymax = rate + se), alpha = 0.3) +
+    facet_wrap(~Behv) +
+    theme_bw() +
+    theme(
+      plot.margin = unit(c(0.1, 0.2, 0, 1), "lines"),
+      strip.background = element_blank(),
+      strip.text.x = element_blank(),
+      axis.text = element_text(size = 10),
+      axis.title = element_text(size = 16, face = "bold"),
+      axis.line = element_line(color = "black"),
+      panel.grid = element_blank(),
+      panel.border = element_blank()
+    ) +
+    xlab("time from stimulus") +
+    ylab("FR") +
+    scale_x_continuous(breaks = scales::pretty_breaks(n = 3)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 3))
+
+  plot <- ggpubr::ggarrange(map, smo,
+    heights = c(2, 0.8), vjust = c(0.5, 0.5),
+    ncol = 1, nrow = 2, align = "v", common.legend = TRUE, legend = "right"
+  )
+
+  plot
+}
+
+
+add_layers <- function(Data, depthpath) {
+  list_of_depth <- list.files(
+    path = depthpath,
+    pattern = "\\.csv$",
+    full.names = TRUE
+  )
+  depth <- read_csv(list_of_depth, id = "id", col_names = F)
+  depth <- depth %>%
+    mutate(id = str_extract(depth$id, "M\\d+_\\d+")) %>%
+    rename("surface" = X1)
+
+
+  Layerd <- Data %>%
+    separate_wider_delim(cluster_id2, delim = "_", names = c("del", "Mouse", "Day"), cols_remove = F) %>%
+    unite("id", c(Mouse, Day)) %>%
+    select(!del) %>%
+    left_join(depth) %>%
+    replace_na(list(surface = 950)) %>% # for cambridge neurotech probes the distsance from pia was always 950
+    mutate(dist_surf = surface - depth) %>%
+    mutate(Layer_fine = case_when(
+      between(dist_surf, -500, -20) ~ "out",
+      between(dist_surf, -20, 50) ~ "L1",
+      between(dist_surf, 50, 500) ~ "L2/3",
+      between(dist_surf, 500, 750) ~ "L5A",
+      between(dist_surf, 750, 1050) ~ "L5B",
+      between(dist_surf, 1050, 1210) ~ "L6",
+      .default = "WTF"
+    )) %>%
+    mutate(Layer = case_when(
+      between(dist_surf, -500, -20) ~ "out",
+      between(dist_surf, -20, 500) ~ "L2/3",
+      between(dist_surf, 500, 1210) ~ "L5",
+      .default = "WTF"
+    ))
+  Layerd
+}
+```
+
+# load data 
+```{r}
+#combcont <- data.table::fread("F:/Florian_paper/Florian/Aligned_Data/Analysable_data/wrangled_Data/R_outputs/combcont.csv", showProgress = T)
+Trialless <- read_csv("F:/Florian_paper/Florian/Aligned_Data/Analysable_data/wrangled_Data/R_outputs/Trialless.csv")
+```
+# A
+```{r}
+# requires combcont
+
+
+plot_single_unit_se(combcont, "78_M2_3", 0.05)
+# ggsave("C:/Users/Freitag/Desktop/figures_v2/Final/Raw Plots/Fig1/A1.tiff", bg = "white", dpi = 900)
+# ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/Into_fig/A1.svg")
+
+plot_single_unit_se(combcont, "44_M2_1", 0.05)
+# ggsave("C:/Users/Freitag/Desktop/figures_v2/Final/Raw Plots/Fig1/A2.tiff", bg = "white", dpi = 900)
+# ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/Into_fig/A2.svg")
+
+plot_single_unit_se(combcont, "50_M6_3", 0.05)
+# ggsave("C:/Users/Freitag/Desktop/figures_v2/Final/Raw Plots/Fig1/A3.tiff", bg = "white", dpi = 900)
+# ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/Into_fig/A3.svg")
+```
+
+
+
+
+# B
+```{r}
+# requires Trialless
+Plot_overview(Trialless %>% left_join(Trialless %>% filter(rel_time < 0) %>% group_by(Behv) %>% summarise(bl = mean(Zscore))) %>% ungroup() %>% mutate(Zscore = Zscore - bl), orderby_Behv = "A2L", by_time = F, theme_smo = theme_bw())
+
+
+# ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/Into_fig/B.tiff", bg = "white", dpi = 900) # using svg for raster plots made them very big
+# ggsave("F:/Berlin/figures_v2/Final/Raw_plots_v2/Into_fig/B_raster.svg")
+```
+
+
+# C2
+```{r}
+# requires Trialless
+# reload and reformat the meta_Data
+metapath <- "F:/Florian_paper/Florian/Aligned_Data/Analysable_data/meta"
+list_of_meta <- list.files(
+  path = metapath,
+  pattern = "\\.tsv$",
+  full.names = TRUE
+)
+
+meta <- read_tsv(list_of_meta, id = "id2") %>%
+  as_tibble() %>%
+  select(id2, cluster_id, n_spikes, depth, group, fr)
+meta <- meta %>% mutate(id = str_extract(meta$id2, "M\\d+_\\d+"))
+
+# Peak_to_trough times from python script
+list_of_ptt <- list.files(
+  path = "F:/Florian_paper/Florian/Aligned_Data/Analysable_data/peak_to_trough_times",
+  pattern = "\\.csv$",
+  full.names = TRUE
+)
+ptt <- read_csv(list_of_ptt, id = "id2") %>% as_tibble()
+
+# keys to match the names of the Neruopixels data to the shortfrom M{id}_{session}
+translator <- read_csv2("F:/Florian_paper/Florian/Aligned_Data/Analysable_data/translator.csv")
+
+# add meta infromation with PTT times
+# add translator and use it to convert the ids
+# filters PTT times that are smaller than 160 microseconds since these are liekly mistakes from the Spikeinterface algorithm  https://pmc.ncbi.nlm.nih.gov/articles/PMC8491674/
+# since ptt only included FS, all others will have NA, which we replace by the corresponding group from the manual curation ( inverted or regular)
+PTT_data <- Trialless %>%
+  left_join(meta %>% left_join(ptt %>% separate(Original_Index, into = c("old", "second_part"), sep = "(?=_row)", extra = "merge", remove = FALSE) %>%
+    left_join(translator) %>% select(second_part:new) %>% select(!Folder) %>% separate_wider_delim(second_part, delim = "_", names = c("d1", "d2", "cluster_id")) %>% select(cluster_id:new) %>% rename(id = new) %>%
+    mutate(cluster_id = as.numeric(cluster_id)) %>% filter(`Peak_to_Valley (ms)` > 0.16)) %>%
+    replace_na(list(`Peak_to_Valley (ms)` = 0)) %>% mutate(newgroup = ifelse(`Peak_to_Valley (ms)` == 0, group, "FS")) %>%
+    filter(group != "noise")) %>%
+  select(Behv:Zscore, newgroup, `Peak_to_Valley (ms)`) %>%
+  filter(newgroup != "noise")
+
+
+
+
+# Focus on important time
+PTT_plot_data <- PTT_data %>%
+  filter(between(rel_time, -0.1, 0.25)) %>%
+  select(Behv, cluster_id2, Zscore, rel_time, newgroup)
+
+# rename from Phy names to usefull names
+PTT_plot_data <- PTT_plot_data %>% mutate(newgroup = case_when(
+  newgroup == "FS" ~ "FS",
+  newgroup == "good" ~ "regular",
+  newgroup == "mua" ~ "inverted",
+  .default = "WTF"
+))
+
+# plot mean + SEM
+PTT_plot_data %>%
+  group_by(Behv, rel_time, newgroup) %>%
+  filter(Behv == "A2L") %>%
+  summarise(rate3 = mean(Zscore), sd = sd(Zscore), se = sd / sqrt(n())) %>%
+  ggplot(aes(rel_time, rate3, col = newgroup, fill = newgroup)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = rate3 - se, ymax = rate3 + se), alpha = 0.4) +
+  geom_vline(xintercept = 0, col = "darkgrey", linetype = "dashed") +
+  theme_bw() +
+  theme(
+    plot.margin = unit(c(0.1, 0.2, 0, 0.7), "lines"),
+    axis.text = element_text(size = 16),
+    axis.title = element_text(size = 30), axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank()
+  ) +
+  xlab("time from stimulus") +
+  ylab("Z-scored FR") +
+  coord_fixed(ratio = 0.07)
+# ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/Into_fig/C2.svg")
+```
+ 
+
+# D
+```{r}
+# baseline correction, does almost nothing
+PTT_data <- PTT_data %>%
+  left_join(PTT_data %>% filter(rel_time < 0) %>% group_by(Behv, newgroup) %>% summarise(bl = mean(Zscore))) %>%
+  ungroup() %>%
+  mutate(Zscore = Zscore - bl)
+
+# since there is a lot of jitter in when units fire but we are interested in the systems response to a stimulus i pick the moment that a unit has its highest FR in a narrow window after the Airpuff. Taking the Mean of the same time window reduced FR since they might only react strongly in 1 out of 4 10ms bins. The overall trends in the data remain the same but using this approach the values are also closer to the ones seen in the Data plots
+
+
+PTT_stat_org <- PTT_data %>%
+  distinct(newgroup, rel_time, Behv, Zscore, cluster_id2, id) %>%
+  filter(between(rel_time, 0, 0.04)) %>%
+  group_by(newgroup, cluster_id2, Behv) %>%
+  slice_max(Zscore) %>%
+  distinct(newgroup, Behv, cluster_id2, id, Zscore) %>%
+  separate_wider_delim(id, names = c("Mouse", "Session"), delim = "_") %>%
+  ungroup() %>%
+  na.omit()
+
+# needed to backtransfrom to original scale
+PPT_min <- min(PTT_stat_org$Zscore)
+
+# transform to fit GAMMA and convert to factor
+PTT_stat <- PTT_stat_org %>%
+  mutate(Zscore = Zscore - min(Zscore) + 1) %>%
+  mutate(across(c(newgroup, Behv, Mouse, Session), as.factor))
+
+# full model
+PPT_mod <- glmer(data = PTT_stat, Zscore ~ Behv + newgroup + Behv * newgroup + (1 | Mouse) + (1 | Mouse:Session), family = Gamma(link = "inverse"))
+# null-model with same random components
+PPT_NULL <- glmer(data = PTT_stat, Zscore ~ 1 + (1 | Mouse) + (1 | Mouse:Session), family = Gamma(link = "inverse"))
+
+# compare to NULL model to see if it offers any increase in likelihood
+anova(PPT_mod, PPT_NULL)
+
+# simulate residuals and comapre to actual residuals, GOdness of Fit estimation
+res <- simulateResiduals(fittedModel = PPT_mod, plot = F, refit = F, use.u = T)
+plotQQunif(res, testUniformity = F, testOutliers = F, testDispersion = F)
+
+
+
+
+
+
+
+#  get esimates in response scale
+emmeans_Behv_simp <- emmeans(PPT_mod, ~ newgroup | Behv, type = "response", adjust = "Tukey")
+# get Pvalues for contrasts, Tukey p-val adjust
+behvcon_simp <- emmeans(PPT_mod, pairwise ~ newgroup | Behv, adjust = "Tukey")
+
+emm <- emmeans(PPT_mod, ~ newgroup | Behv)
+
+pairs_res <- pairs(emm, adjust = "none")
+p_vals_waveform <- as_tibble(summary(pairs_res, infer = TRUE)) %>%
+  mutate(p_adj = round(p.adjust(p.value, method = "fdr"),4))
+
+# Convert to tibbles Filter for A2L
+
+pdata <- emmeans_Behv_simp %>%
+  as_tibble() %>%
+  mutate(newgroup = as.character(newgroup)) %>%
+  filter(Behv == "A2L")
+pdata <- pdata %>% mutate(newgroup = trimws(as.character(newgroup)))
+
+# Prepare p-values
+pvals <- behvcon_simp$contrasts %>%
+  as_tibble() %>%
+  filter(Behv == "A2L") %>%
+  separate_wider_delim(contrast, names = c("group1", "group2"), delim = "-") %>%
+  mutate(psig = case_when(
+    p.value < 0.001 ~ "***",
+    p.value < 0.01 ~ "**",
+    p.value < 0.05 ~ "*",
+    p.value > 0.05 ~ "NS",
+  )) %>%
+  mutate(group1 = as.character(group1), group2 = as.character(group2)) %>%
+  mutate(group1 = trimws(group1), group2 = trimws(group2)) %>% # Ensure character type
+  left_join(pdata %>% mutate(newgroup = as.character(newgroup)),
+    by = join_by(group1 == newgroup)
+  )
+
+# Plot
+ggplot(pdata %>% mutate(response = response + PPT_min - 1, asymp.LCL = asymp.LCL + PPT_min - 1, asymp.UCL = asymp.UCL + PPT_min - 1) %>% mutate(newgroup = case_when(
+  newgroup == "FS" ~ "FS",
+  newgroup == "good" ~ "RS",
+  newgroup == "mua" ~ "inverted",
+  .default = "Fuck"
+)) %>% mutate(newgroup = factor(newgroup, levels = c("FS", "inverted", "RS"))), aes(x = newgroup, y = response)) +
+  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, linewidth = 1.3) +
+  geom_point() +
+  geom_text(aes(label = round(response, 2)), hjust = -0.5, size = 5) +
+  theme_bw() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank()
+  ) +
+  ylab("max Zscore response") +
+  ggpubr::stat_pvalue_manual(
+    pvals %>% mutate(response = response + PPT_min - 1, asymp.LCL = asymp.LCL + PPT_min - 1, asymp.UCL = asymp.UCL + PPT_min - 1) %>% mutate(group1 = case_when(
+      group1 == "FS" ~ "FS",
+      group1 == "good" ~ "RS",
+      group1 == "mua" ~ "inverted",
+      .default = "WTF"
+    )) %>% mutate(group2 = case_when(
+      group2 == "FS" ~ "FS",
+      group2 == "good" ~ "RS",
+      group2 == "mua" ~ "inverted",
+      .default = "WTF"
+    )) %>% mutate(y.position = asymp.UCL + 0.3, y.position = ifelse(group1 == "FS" & group2 == "inverted", y.position + 0.4, y.position)),
+    label = "psig",
+    xmin = "group1", xmax = "group2", y.position = "y.position", size = 8, bracket.size = 1
+  ) +
+  coord_fixed(ratio = 0.3)
+ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/Into_fig/D.svg")
+
+
+
+```
+
+# E
+```{r}
+Layerd <- add_layers(Trialless, "F:/Florian_paper/Florian/Aligned_Data/Analysable_data/depths")
+
+# baseline correction
+Layerd <- Layerd %>%
+  left_join(Layerd %>% filter(rel_time < 0) %>% group_by(Behv, Layer) %>% summarise(bl = mean(Zscore))) %>%
+  ungroup() %>%
+  mutate(Zscore = Zscore - bl)
+
+# for backtransforming later
+Layerd_stats_org <- Layerd %>%
+  distinct(Layer, rel_time, Behv, Zscore, cluster_id2, id) %>%
+  filter(between(rel_time, 0, 0.04)) %>%
+  filter(Layer %in% c("L2/3", "L5")) %>%
+  group_by(Layer, cluster_id2, Behv) %>%
+  slice_max(Zscore) %>%
+  distinct(Layer, Behv, cluster_id2, id, Zscore) %>%
+  separate_wider_delim(id, names = c("Mouse", "Session"), delim = "_") %>%
+  ungroup() %>%
+  na.omit()
+
+Layerd_min <- min(Layerd_stats_org$Zscore)
+
+
+# make all values positive to use Gamma distribution
+Layerd_stats <- Layerd_stats_org %>%
+  mutate(Zscore = Zscore - min(Zscore) + 1) %>%
+  mutate(across(c(Layer, Behv, Mouse, Session), as.factor))
+
+
+# fit and test the model
+
+Layerd_mod <- glmer(data = Layerd_stats, Zscore ~ Behv + Layer + (1 | Mouse) + (1 | Mouse:Session), family = Gamma(link = "log"))
+Layerd_Null <- glmer(data = Layerd_stats, Zscore ~ 1 + (1 | Mouse) + (1 | Mouse:Session), family = Gamma(link = "inverse"))
+anova(Layerd_mod, Layerd_Null)
+
+# Layerd_mod <- glmer(data = Layerd_stats, Zscore ~ Behv + Layer + (1 | Mouse) + (1 | Mouse:Session), family = Gamma(link = "inverse"))
+# emmeans(Layerd_mod, ~ Layer | Behv, type = "response")
+
+
+Layerd_mod <- glmer(data = Layerd_stats, Zscore ~ Behv + Layer + Behv:Layer + (1 | Mouse) + (1 | Mouse:Session), family = Gamma(link = "inverse"))
+emmeans(Layerd_mod, ~ Layer | Behv, type = "response")
+
+
+# check residuals
+res <- DHARMa::simulateResiduals(fittedModel = Layerd_mod, plot = F, refit = F, use.u = T)
+DHARMa::plotQQunif(res, testUniformity = F, testOutliers = F, testDispersion = F)
+
+# get estimates for the differences between Layers based on the Task and backtransform them from Link to the response scale
+# estimates are L2/3 - 5
+Layerd_EMM <- pairs(regrid(emmeans(Layerd_mod, ~ Layer | Behv, type = "response"),adjust='Tukey'))
+
+
+final_p_values <- as_tibble(summary(Layerd_EMM, infer = TRUE)) %>%
+  mutate(p_adj = p.adjust(p.value, method = "fdr"))
+
+# get CIs and invert numbers to get the L5-L2/3 contrasts because the plot looks better
+Layerd_EMM_CI <- summary(Layerd_EMM, infer = c(TRUE, TRUE)) %>%
+  as_tibble() %>%
+  select(contrast, Behv, estimate, asymp.LCL, asymp.UCL, p.value) %>%
+  mutate(across(estimate:asymp.UCL, ~ . * -1))
+Layerd_EMM_CI %>% ggplot(aes(Behv, estimate)) +
+  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2) +
+  geom_point(size = 3) +
+  geom_text(aes(label = round(estimate, 2)), hjust = -0.5, size = 5) +
+  theme_bw() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank()
+  ) +
+  coord_fixed(ratio = 1.5)
+
+# ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/Into_fig/E.svg")
+```
+
+
+
+# for using Si_unit_ids
+```{r}
+# requires Trialless
+# reload and reformat the meta_Data
+metapath <- "E:/Florian_paper/Florian/Aligned_Data/Analysable_data/meta"
+list_of_meta <- list.files(
+  path = metapath,
+  pattern = "\\.tsv$",
+  full.names = TRUE
+)
+
+meta <- read_tsv(list_of_meta, id = "id2") %>%
+  as_tibble() %>%
+  select(id2, cluster_id, n_spikes, depth, group, fr, si_unit_id)
+meta <- meta %>% mutate(id = str_extract(meta$id2, "M\\d+_\\d+"))
+
+# Peak_to_trough times from python script
+list_of_ptt <- list.files(
+  path = "C:/Users/Freitag/Desktop/peak_to_trough_times2",
+  pattern = "\\.csv$",
+  full.names = TRUE
+)
+ptt <- read_csv(list_of_ptt, id = "id2") %>% as_tibble()
+
+# keys to match the names of the Neruopixels data to the shortfrom M{id}_{session}
+translator <- read_csv2("E:/Florian_paper/Florian/Aligned_Data/Analysable_data/translator.csv")
+
+# add meta infromation with PTT times
+# add translator and use it to convert the ids
+# filters PTT times that are smaller than 160 microseconds since these are liekly mistakes from the Spikeinterface algorithm  https://pmc.ncbi.nlm.nih.gov/articles/PMC8491674/
+# since ptt only included FS, all others will have NA, which we replace by the corresponding group from the manual curation ( inverted or regular)
+
+ptt2 <- ptt %>%
+  separate(Original_Index, into = c("old", "second_part"), sep = "(?=_unit)", extra = "merge", remove = FALSE) %>%
+  left_join(translator) %>%
+  select(second_part:new) %>%
+  select(!Folder) %>%
+  separate_wider_delim(second_part, delim = "_", names = c("d1", "d2", "si_unit_id")) %>%
+  select(si_unit_id:new) %>%
+  rename(id = new) %>%
+  mutate(si_unit_id = as.numeric(si_unit_id)) %>%
+  filter(`Peak_to_Valley (ms)` > 0.16) %>%
+  unite("sid", c(si_unit_id, id), remove = F)
+
+meta2 <- meta %>%
+  unite("sid", c(si_unit_id, id), remove = F) %>%
+  unite("cluster_id2", c(cluster_id, id), remove = F) %>%
+  left_join(ptt2, by = join_by(sid)) %>%
+  replace_na(list(`Peak_to_Valley (ms)` = 0)) %>%
+  mutate(newgroup = ifelse(`Peak_to_Valley (ms)` == 0, group, "FS")) %>%
+  filter(group != "noise")
+
+PTT_data <- Trialless %>%
+  left_join(meta2) %>%
+  select(Behv:Zscore, newgroup, `Peak_to_Valley (ms)`) %>%
+  filter(newgroup != "noise")
+
+
+
+
+# Focus on important time
+PTT_plot_data <- PTT_data %>%
+  filter(between(rel_time, -0.1, 0.25)) %>%
+  select(Behv, cluster_id2, Zscore, rel_time, newgroup)
+
+# rename from Phy names to usefull names
+PTT_plot_data <- PTT_plot_data %>% mutate(newgroup = case_when(
+  newgroup == "FS" ~ "FS",
+  newgroup == "good" ~ "regular",
+  newgroup == "mua" ~ "inverted",
+  .default = "WTF"
+))
+
+# plot mean + SEM
+PTT_plot_data %>%
+  group_by(Behv, rel_time, newgroup) %>%
+  filter(Behv == "A2L") %>%
+  summarise(rate3 = mean(Zscore), sd = sd(Zscore), se = sd / sqrt(n())) %>%
+  ggplot(aes(rel_time, rate3, col = newgroup, fill = newgroup)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = rate3 - se, ymax = rate3 + se), alpha = 0.4) +
+  geom_vline(xintercept = 0, col = "darkgrey", linetype = "dashed") +
+  theme_minimal() +
+  theme(
+    plot.margin = unit(c(0.1, 0.2, 0, 0.7), "lines"),
+    axis.text = element_text(size = 16),
+    axis.title = element_text(size = 30)
+  ) +
+  xlab("time from stimulus") +
+  ylab("Z-scored FR") +
+  coord_fixed(ratio = 0.07)
+```

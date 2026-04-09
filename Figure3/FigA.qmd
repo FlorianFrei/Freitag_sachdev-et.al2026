@@ -1,0 +1,350 @@
+---
+title: "Fig_modulation_direction"
+format: html
+---
+
+```{r}
+library(tidyverse)
+```
+
+
+```{r}
+Trialless <- read_csv("F:/Florian_paper/Florian/Aligned_Data/Analysable_data/wrangled_Data/R_outputs/Trialless.csv")
+add_layers <- function(Data, depthpath) {
+  list_of_depth <- list.files(
+    path = depthpath,
+    pattern = "\\.csv$",
+    full.names = TRUE
+  )
+  depth <- read_csv(list_of_depth, id = "id", col_names = F)
+  depth <- depth %>%
+    mutate(id = str_extract(depth$id, "M\\d+_\\d+")) %>%
+    rename("surface" = X1)
+
+
+  Layerd <- Data %>%
+    separate_wider_delim(cluster_id2, delim = "_", names = c("del", "Mouse", "Day"), cols_remove = F) %>%
+    unite("id", c(Mouse, Day)) %>%
+    select(!del) %>%
+    left_join(depth) %>%
+    replace_na(list(surface = 950)) %>%
+    mutate(dist_surf = surface - depth) %>%
+    mutate(Layer_fine = case_when(
+      between(dist_surf, -500, -20) ~ "out",
+      between(dist_surf, -20, 50) ~ "L1",
+      between(dist_surf, 50, 500) ~ "L2/3",
+      between(dist_surf, 500, 750) ~ "L5A",
+      between(dist_surf, 750, 1050) ~ "L5B",
+      between(dist_surf, 1050, 1210) ~ "L6",
+      .default = "WTF"
+    )) %>%
+    mutate(Layer = case_when(
+      between(dist_surf, -500, -20) ~ "out",
+      between(dist_surf, -20, 500) ~ "L2/3",
+      between(dist_surf, 500, 1210) ~ "L5",
+      .default = "WTF"
+    ))
+  Layerd
+}
+
+
+metapath <- "F:/Florian_paper/Florian/Aligned_Data/Analysable_data/meta"
+list_of_meta <- list.files(
+  path = metapath,
+  pattern = "\\.tsv$",
+  full.names = TRUE
+)
+
+meta <- read_tsv(list_of_meta, id = "id2") %>%
+  as_tibble() %>%
+  select(id2, cluster_id, n_spikes, depth, group, fr)
+meta <- meta %>% mutate(id = str_extract(meta$id2, "M\\d+_\\d+"))
+
+# Peak_to_trough times from python script
+list_of_ptt <- list.files(
+  path = "F:/Florian_paper/Florian/Aligned_Data/Analysable_data/peak_to_trough_times",
+  pattern = "\\.csv$",
+  full.names = TRUE
+)
+ptt <- read_csv(list_of_ptt, id = "id2") %>% as_tibble()
+
+# keys to match the names of the Neruopixels data to the shortfrom M{id}_{session}
+translator <- read_csv2("F:/Florian_paper/Florian/Aligned_Data/Analysable_data/translator.csv")
+
+PTT_data <- Trialless %>%
+  left_join(meta %>% left_join(ptt %>% separate(Original_Index, into = c("old", "second_part"), sep = "(?=_row)", extra = "merge", remove = FALSE) %>%
+    left_join(translator) %>% select(second_part:new) %>% select(!Folder) %>% separate_wider_delim(second_part, delim = "_", names = c("d1", "d2", "cluster_id")) %>% select(cluster_id:new) %>% rename(id = new) %>%
+    mutate(cluster_id = as.numeric(cluster_id)) %>% filter(`Peak_to_Valley (ms)` > 0.16)) %>%
+    replace_na(list(`Peak_to_Valley (ms)` = 0)) %>% mutate(newgroup = ifelse(`Peak_to_Valley (ms)` == 0, group, "FS")) %>%
+    filter(group != "noise")) %>%
+  select(Behv:Zscore, newgroup, `Peak_to_Valley (ms)`) %>%
+  filter(newgroup != "noise")
+
+Trialless <- add_layers(PTT_data, "F:/Florian_paper/Florian/Aligned_Data/Analysable_data/depths")
+```
+
+#multiple comparison correction
+
+```{r}
+zetapath <- "F:/Florian_paper/Florian/Aligned_Data/Analysable_data/wrangled_Data/Zetatests"
+list_of_zeta <- list.files(
+  path = zetapath,
+  pattern = "\\.csv$",
+  full.names = T
+)
+zeta <- read_csv(list_of_zeta, id = "Behv")
+# extract id from filename, remove videos with more than 2 missing frames
+zeta <- zeta %>%
+  mutate(Behv = str_extract(Behv, "(?<=/)[^/]+(?=\\.csv$)")) %>%
+  mutate(Behv = ifelse(Behv == "W2T", "HIT", Behv)) %>%
+  unite("unit", c(unit, Mouse, Day)) %>%
+  select(-`...1`)
+zeta <- zeta %>%
+  mutate(p_adj = p.adjust(p_val, method = "BH")) %>%
+  filter(p_adj < 0.05) %>%
+  select(Behv, unit, p_adj) %>%
+  mutate(Behv = ifelse(Behv %in% c("HIT", "Whisk"), "W2T", Behv)) %>%
+  group_by(unit, Behv) %>%
+  summarise(p_adj = min(p_adj)) %>%
+  ungroup() # This last step is because there are 2 tests for Whisks and Hit but the plot shows them combined as W2T
+```
+
+
+# A prepare data
+
+
+```{r}
+pre <- Trialless %>%
+  filter(between(rel_time, -5, -2)) %>%
+  group_by(cluster_id2, Behv) %>%
+  summarise(pre = mean(Zscore))
+post <- Trialless %>%
+  filter(between(rel_time, 0, 0.1)) %>%
+  group_by(cluster_id2, Behv) %>%
+  summarise(post = mean(Zscore))
+
+combcont2 <- pre %>%
+  left_join(post) %>%
+  left_join(Trialless %>% select(cluster_id2, Layer, newgroup) %>% distinct())
+
+res2 <- combcont2 %>%
+  group_by(cluster_id2, Behv) %>%
+  summarise(
+    diff = mean(post - pre, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  ungroup() %>%
+  mutate(
+    direction = if_else(diff > 0, "increase", "decrease")
+  ) %>%
+  select(cluster_id2, Behv, direction) %>%
+  left_join(zeta, by = join_by("cluster_id2" == "unit", Behv)) %>%
+  mutate(p_adj = replace_na(p_adj, 1)) %>%
+  mutate(dir_cat = ifelse(p_adj > 0.05, "no_change", direction)) %>%
+  select(cluster_id2, Behv, dir_cat)
+
+
+T3 <- Trialless %>%
+  left_join(res2) %>%
+  mutate(Behv = ifelse(Behv == "PC", "UA", Behv))
+baseline <- T3 %>%
+  filter(between(rel_time, -5, -2)) %>%
+  group_by(cluster_id2) %>%
+  summarise(Zs = mean(Zscore))
+```
+
+
+
+# A2L Plots
+```{r}
+n_cells <- T3 %>%
+  filter(Behv == "A2L") %>%
+  filter(newgroup != "mua") %>%
+  filter(Layer %in% c("L2/3", "L5")) %>%
+  mutate(newgroup = ifelse(newgroup == "good", "RS", newgroup)) %>%
+  distinct(id, Layer, newgroup, dir_cat, cluster_id2) %>%
+  group_by(newgroup, Layer, dir_cat) %>%
+  summarise(n = n())
+
+
+plotA2L_0.2 <- T3 %>%
+  left_join(baseline) %>%
+  mutate(Zscore = Zscore - Zs) %>%
+  filter(Behv == "A2L") %>%
+  filter(newgroup != "mua") %>%
+  filter(Layer %in% c("L2/3", "L5")) %>%
+  mutate(newgroup = ifelse(newgroup == "good", "RS", newgroup)) %>%
+  mutate(rel_time = floor(rel_time / 0.02) * 0.02) %>%
+  group_by(cluster_id2, Behv, newgroup, dir_cat, Layer, rel_time) %>%
+  summarise(Zscore = mean(Zscore)) %>%
+  group_by(Behv, newgroup, Layer, dir_cat, rel_time) %>%
+  summarise(mean_Zscore = mean(Zscore), sd = sd(Zscore)) %>%
+  filter(between(rel_time, -0.5, 0.5)) %>%
+  left_join(n_cells) %>%
+  mutate(sem = sd / sqrt(n))
+
+plotA2L_0.2 %>%
+  ggplot(aes(rel_time, mean_Zscore)) +
+  geom_line(aes(col = dir_cat)) +
+  geom_ribbon(aes(ymin = mean_Zscore - sem, ymax = mean_Zscore + sem, fill = dir_cat), alpha = 0.3) +
+  facet_grid(newgroup ~ Layer) +
+  theme_bw() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_blank()
+  ) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 2)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 3))
+
+ggsave("F:/Berlin/figures_v2/Final/Raw_plots_v2/moveDir_fig/A_A2L_line.svg")
+
+
+n_cells %>%
+  group_by(Layer, newgroup) %>%
+  mutate(prop = n / sum(n)) %>%
+  ggplot(aes(x = 1, y = prop, fill = dir_cat)) +
+  geom_col(width = 1, color = "white") +
+  coord_polar(theta = "y") +
+  facet_grid(newgroup ~ Layer) +
+  theme_void() +
+  theme(strip.text = element_text(size = 12)) +
+  geom_text(
+    aes(x = 1.6, label = n),
+    color = "black",
+    size = 5, position = position_stack(vjust = 0.5, )
+  )
+ggsave("F:/Berlin/figures_v2/Final/Raw_plots_v2/moveDir_fig/A_A2L_pie.svg")
+```
+`
+
+# UA Plots
+
+```{r}
+n_cells <- T3 %>%
+  filter(Behv == "UA") %>%
+  filter(newgroup != "mua") %>%
+  filter(Layer %in% c("L2/3", "L5")) %>%
+  mutate(newgroup = ifelse(newgroup == "good", "RS", newgroup)) %>%
+  distinct(id, Layer, newgroup, dir_cat, cluster_id2) %>%
+  group_by(newgroup, Layer, dir_cat) %>%
+  summarise(n = n())
+
+
+plotUA_0.2 <- T3 %>%
+  left_join(baseline) %>%
+  mutate(Zscore = Zscore - Zs) %>%
+  filter(Behv == "UA") %>%
+  filter(newgroup != "mua") %>%
+  filter(Layer %in% c("L2/3", "L5")) %>%
+  mutate(newgroup = ifelse(newgroup == "good", "RS", newgroup)) %>%
+  mutate(rel_time = floor(rel_time / 0.02) * 0.02) %>%
+  group_by(cluster_id2, Behv, newgroup, dir_cat, Layer, rel_time) %>%
+  summarise(Zscore = mean(Zscore)) %>%
+  group_by(Behv, newgroup, Layer, dir_cat, rel_time) %>%
+  summarise(mean_Zscore = mean(Zscore), sd = sd(Zscore)) %>%
+  filter(between(rel_time, -0.5, 0.5)) %>%
+  left_join(n_cells) %>%
+  mutate(sem = sd / sqrt(n))
+
+plotUA_0.2 %>%
+  ggplot(aes(rel_time, mean_Zscore)) +
+  geom_line(aes(col = dir_cat)) +
+  geom_ribbon(aes(ymin = mean_Zscore - sem, ymax = mean_Zscore + sem, fill = dir_cat), alpha = 0.3) +
+  facet_grid(newgroup ~ Layer) +
+  theme_bw() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_blank()
+  ) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 2)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 3))
+
+ggsave("F:/Berlin/figures_v2/Final/Raw_plots_v2/moveDir_fig/A_UA_line.svg")
+
+
+n_cells %>%
+  group_by(Layer, newgroup) %>%
+  mutate(prop = n / sum(n)) %>%
+  ggplot(aes(x = 1, y = prop, fill = dir_cat)) +
+  geom_col(width = 1, color = "white") +
+  coord_polar(theta = "y") +
+  facet_grid(newgroup ~ Layer) +
+  theme_void() +
+  theme(strip.text = element_text(size = 12)) +
+  geom_text(
+    aes(x = 1.6, label = n),
+    color = "black",
+    size = 5, position = position_stack(vjust = 0.5, )
+  )
+ggsave("F:/Berlin/figures_v2/Final/Raw_plots_v2/moveDir_fig/A_UA_pie.svg")
+```
+
+
+# W2T Plots
+
+
+```{r}
+n_cells <- T3 %>%
+  filter(Behv == "W2T") %>%
+  filter(newgroup != "mua") %>%
+  filter(Layer %in% c("L2/3", "L5")) %>%
+  mutate(newgroup = ifelse(newgroup == "good", "RS", newgroup)) %>%
+  distinct(id, Layer, newgroup, dir_cat, cluster_id2) %>%
+  group_by(newgroup, Layer, dir_cat) %>%
+  summarise(n = n())
+
+
+plotW2T_0.2 <- T3 %>%
+  left_join(baseline) %>%
+  mutate(Zscore = Zscore - Zs) %>%
+  filter(Behv == "W2T") %>%
+  filter(newgroup != "mua") %>%
+  filter(Layer %in% c("L2/3", "L5")) %>%
+  mutate(newgroup = ifelse(newgroup == "good", "RS", newgroup)) %>%
+  mutate(rel_time = floor(rel_time / 0.02) * 0.02) %>%
+  group_by(cluster_id2, Behv, newgroup, dir_cat, Layer, rel_time) %>%
+  summarise(Zscore = mean(Zscore)) %>%
+  group_by(Behv, newgroup, Layer, dir_cat, rel_time) %>%
+  summarise(mean_Zscore = mean(Zscore), sd = sd(Zscore)) %>%
+  filter(between(rel_time, -0.5, 0.5)) %>%
+  left_join(n_cells) %>%
+  mutate(sem = sd / sqrt(n))
+
+plotW2T_0.2 %>%
+  ggplot(aes(rel_time, mean_Zscore)) +
+  geom_line(aes(col = dir_cat)) +
+  geom_ribbon(aes(ymin = mean_Zscore - sem, ymax = mean_Zscore + sem, fill = dir_cat), alpha = 0.3) +
+  facet_grid(newgroup ~ Layer) +
+  theme_bw() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_blank()
+  ) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 2)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 3))
+
+ggsave("F:/Berlin/figures_v2/Final/Raw_plots_v2/moveDir_fig/A_W2T_line.svg")
+
+
+n_cells %>%
+  group_by(Layer, newgroup) %>%
+  mutate(prop = n / sum(n)) %>%
+  ggplot(aes(x = 1, y = prop, fill = dir_cat)) +
+  geom_col(width = 1, color = "white") +
+  coord_polar(theta = "y") +
+  facet_grid(newgroup ~ Layer) +
+  theme_void() +
+  theme(strip.text = element_text(size = 12)) +
+  geom_text(
+    aes(x = 1.6, label = n),
+    color = "black",
+    size = 5, position = position_stack(vjust = 0.5, )
+  )
+ggsave("F:/Berlin/figures_v2/Final/Raw_plots_v2/moveDir_fig/A_W2T_pie.svg")
+```

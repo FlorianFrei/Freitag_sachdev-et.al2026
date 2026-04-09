@@ -1,0 +1,576 @@
+---
+title: "Fig3_A-E"
+author: "Florian Freitag"
+format: html
+---
+
+# load libraries
+```{r}
+library(tidyverse)
+library(pracma)
+library(emmeans)
+library(lme4)
+library(DHARMa)
+```
+
+# load data for plot F
+```{r}
+combcont <- data.table::fread("F:/Florian_paper/Florian/Aligned_Data/Analysable_data/wrangled_Data/R_outputs/combcont.csv", showProgress = T)
+```
+
+
+
+# load and wrangle data 
+```{r}
+datapath <- "F:/Florian_paper/Florian/Aligned_Data/Analysable_data/Behvaiour"
+list_of_data <- list.files(
+  path = datapath,
+  pattern = "\\.csv$",
+  full.names = TRUE
+)
+Data_Behv <- read_csv(list_of_data, id = "group")
+# extract id from filename, remove videos with more than 2 missing frames
+Data_Behv <- Data_Behv %>%
+  mutate(id = str_extract(Data_Behv$group, "M\\d+_\\d+")) %>%
+  unite("Trial2", id, Trial, remove = F) %>%
+  group_by(Trial2) %>%
+  mutate(maxframe = max(framenumber)) %>%
+  ungroup() %>%
+  filter(maxframe > 698)
+
+
+
+
+Behv_diff <- Data_Behv %>%
+  select(`whisker_tip@@x`:`whisker_tip@@likelihood`, framenumber:id) %>%
+  rename_with(~ sub(".*@@", "", .), starts_with("whisker_tip")) %>%
+  filter(Behv != "W2T") %>%
+  mutate(triggerframe = 500 - Time_Difference * 200) %>%
+  mutate(triggerframe = round(triggerframe * 200) / 200) %>%
+  group_by(Trial2) %>%
+  mutate(x = ifelse(likelihood < 0.9,
+    (lead(x, default = mean(x, na.rm = TRUE)) + lag(x, default = mean(x, na.rm = TRUE))) / 2, x
+  )) %>%
+  mutate(y = ifelse(likelihood < 0.9,
+    (lead(y, default = mean(y, na.rm = TRUE)) + lag(y, default = mean(y, na.rm = TRUE))) / 2, y
+  )) %>%
+  select(!likelihood) %>%
+  group_by(Trial2) %>%
+  mutate(mx = mean(x), my = mean(y)) %>%
+  ungroup() %>%
+  mutate(x2 = x - mx, y2 = y - my) %>%
+  mutate(framenumber = framenumber / 200, triggerframe = triggerframe / 200)
+
+
+Behv_diff2 <- Behv_diff %>%
+  group_by(Trial2) %>%
+  arrange(framenumber) %>%
+  # 2. compute trapezoidal‐area for each segment in x & y
+  mutate(
+    area_x_seg = (abs(x2) + lead(abs(x2))) / 2,
+    area_y_seg = (abs(y2) + lead(abs(y2))) / 2
+  ) %>%
+  # 3. total area is just the sum of all these segment‐areas
+  mutate(
+    total_area_x = sum(area_x_seg, na.rm = TRUE),
+    total_area_y = sum(area_y_seg, na.rm = TRUE)
+  ) %>%
+  # 4. cumulative area up to each frame
+  mutate(
+    cum_area_x = cumsum(replace_na(area_x_seg, 0)),
+    cum_area_y = cumsum(replace_na(area_y_seg, 0))
+  ) %>%
+  # 5. percent covered up to each frame
+  mutate(
+    pct_cov_x = cum_area_x / total_area_x * 100,
+    pct_cov_y = cum_area_y / total_area_y * 100
+  ) %>%
+  # 6. per-frame percent = current pct – previous frame’s pct
+  mutate(
+    pc_x = pct_cov_x - lag(pct_cov_x, default = 0),
+    pc_y = pct_cov_y - lag(pct_cov_y, default = 0)
+  ) %>%
+  ungroup()
+
+Behv_diff %>% distinct(Trial2)
+```
+
+# Fig A +B
+```{r}
+# i visually searched for a trial with low baseline movement that reflects the mean plot
+
+singleTrial <- Behv_diff2 %>% filter(Trial2 == "M7_3_3")
+
+# plot of normalized movement over time
+
+# ggsave("C:/Users/Freitag/Desktop/figures_v2/Final/Raw Plots/Fig3/A.svg")
+
+
+ggplot(singleTrial %>% pivot_longer(cols = c(x2, y2), names_to = "name", values_to = "value"), aes(framenumber, value, col = name)) +
+  geom_line() +
+  geom_vline(aes(xintercept = triggerframe)) +
+  geom_vline(aes(xintercept = triggerframe + 0.25)) +
+  geom_vline(aes(xintercept = triggerframe + 0.5)) +
+  guides(color = guide_legend(override.aes = list(linewidth = 10))) +
+  theme_bw() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_blank()
+  )
+# ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/movement_fig/A.svg")
+
+
+# plot of cumultative percentage change over frame
+# just X, its very similar to y
+ggplot(singleTrial, aes(framenumber, pct_cov_x)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "Percentage of Area Covered Over Time",
+    x = "Frame Number",
+    y = "Percentage Covered (%)"
+  ) +
+  theme_bw() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_blank()
+  ) +
+  geom_vline(aes(xintercept = triggerframe)) +
+  geom_vline(aes(xintercept = triggerframe + 0.25)) +
+  geom_vline(aes(xintercept = triggerframe + 0.5)) +
+  coord_fixed(ratio = 0.018)
+# ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/movement_fig/B.svg")
+```
+# C
+
+```{r}
+max <- Behv_diff2 %>%
+  filter(Behv == "A2L") %>%
+  group_by(Trial2) %>%
+  mutate(newframe = round((framenumber - triggerframe) * 200) / 200) %>%
+  summarise(g = range(newframe)) %>%
+  filter(g > 0) %>%
+  ungroup() %>%
+  slice_min(g, with_ties = F) %>%
+  pull(g)
+min <- Behv_diff2 %>%
+  filter(Behv == "A2L") %>%
+  group_by(Trial2) %>%
+  mutate(newframe = round((framenumber - triggerframe) * 200) / 200) %>%
+  summarise(g = range(newframe)) %>%
+  filter(g < 0) %>%
+  ungroup() %>%
+  slice_max(g, with_ties = F) %>%
+  pull(g)
+
+
+
+
+comb_coord <- Behv_diff2 %>%
+  select(framenumber, x2, y2, pc_x, pc_y, triggerframe, Behv, Trial2, id) %>%
+  mutate(chunks = case_when(
+    between(framenumber, triggerframe, triggerframe + 0.255) ~ "Airpuff",
+    between(framenumber, triggerframe + 0.256, triggerframe + 0.505) ~ "Post_Airpuff",
+    TRUE ~ "Base" # Default case if none of the above conditions are met
+  )) %>%
+  mutate(diff3 = (pc_x + pc_y) / 2) %>%
+  ungroup()
+
+
+
+# 50 ms bins with se
+n_trials_A2L <- comb_coord %>%
+  filter(Behv == "A2L") %>%
+  distinct(Trial2) %>%
+  summarise(n = n()) %>%
+  pull(n)
+
+
+A2Lplot_data <- comb_coord %>%
+  filter(Behv == "A2L") %>%
+  # Bin time (50 ms bins, consistent)
+  mutate(
+    bin_time = floor((framenumber - triggerframe) / 0.05) * 0.05
+  ) %>%
+  filter(between(bin_time, min, 2.5)) %>%
+  # Step 1: average within trial
+  group_by(Trial2, bin_time) %>%
+  summarise(
+    trial_bin_speed = mean(diff3, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # Step 2: average across trials
+  group_by(bin_time) %>%
+  summarise(
+    percm = mean(trial_bin_speed, na.rm = TRUE),
+    sd = sd(trial_bin_speed, na.rm = TRUE),
+    n = n(), # number of trials contributing
+    .groups = "drop"
+  ) %>%
+  mutate(se = sd / sqrt(n))
+
+# Plot
+A2Lplot_data %>%
+  ggplot(aes(bin_time, percm)) +
+  geom_line() +
+  geom_ribbon(
+    aes(ymin = percm - se, ymax = percm + se),
+    alpha = 0.3
+  ) +
+  theme_bw() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_blank()
+  ) +
+  geom_vline(xintercept = 0) +
+  geom_vline(xintercept = 0.255) +
+  geom_vline(xintercept = 0.505) +
+  geom_hline(yintercept = 100 / 700, linetype = "dashed") +
+  coord_fixed(ratio = 50)
+
+# ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/movement_fig/C.svg")
+
+50 * 200
+```
+
+
+# D
+```{r}
+ntrial <- comb_coord %>%
+  group_by(Behv) %>%
+  summarise(ntrial = n_distinct(Trial2))
+
+
+plot_df2 <- comb_coord %>%
+  filter(Behv != "W2T") %>%
+  # Use floor for consistent 50ms binning
+  mutate(bin_time = floor((framenumber - triggerframe) / 0.05) * 0.05) %>%
+  # Step 1: Average within each bin for each Trial
+  group_by(Behv, Trial2, bin_time) %>%
+  summarise(trial_bin_speed = mean(diff3, na.rm = TRUE), .groups = "drop") %>%
+  # Step 2: Average across trials
+  group_by(Behv, bin_time) %>%
+  summarise(
+    percm = mean(trial_bin_speed),
+    sd = sd(trial_bin_speed), # This is the variation between trials
+    .groups = "drop"
+  ) %>%
+  # Step 3: Baseline Correction
+  group_by(Behv) %>%
+  mutate(
+    baseline = mean(percm[bin_time < 0], na.rm = TRUE),
+    percm_bc = percm - baseline
+  ) %>%
+  left_join(ntrial, by = "Behv") %>%
+  mutate(se = sd / sqrt(ntrial))
+
+
+
+
+ggplot(plot_df2, aes(bin_time, percm_bc, col = Behv)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = percm_bc - se, ymax = percm_bc + se, fill = Behv), alpha = 0.3) +
+  theme_bw() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_blank()
+  ) +
+  geom_vline(aes(xintercept = 0)) +
+  geom_vline(aes(xintercept = 0.255)) +
+  geom_vline(aes(xintercept = 0.505)) +
+  xlim(-0.2, 1.24) +
+  xlab("Time from Airpuff [s]") +
+  ylab(" normalized movement") +
+  ylim(-0.04, 0.1)
+
+
+# ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/movement_fig/D.svg")
+```
+
+#D stats
+```{r}
+# here i cannot use the trick from the neuronal data of taking the max in a small window. with this data it had a huge effect on the significance.
+
+# statsdata <- comb_coord %>%
+# filter(Behv != "W2T", chunks == "Post_Airpuff")  %>% group_by(Trial2,id,Behv) %>% summarise(g = mean(diff3))
+
+
+
+
+statsdata <- comb_coord %>%
+  filter(Behv != "W2T", chunks == "Post_Airpuff") %>%
+  mutate(
+    rel_time = framenumber - triggerframe,
+    timebin = as.factor(floor(rel_time / 0.05) * 0.05) # 50 ms bins
+  ) %>%
+  group_by(id, Trial2, Behv, timebin) %>%
+  summarise(g = mean(diff3), .groups = "drop")
+
+
+
+
+
+
+
+mod <- glmer(g ~ Behv * timebin + (1 | id), data = statsdata, family = Gamma(link = "inverse"))
+
+res <- simulateResiduals(fittedModel = mod, plot = F, refit = F, use.u = T)
+
+plotQQunif(res, testUniformity = F, testOutliers = F, testDispersion = F)
+
+
+
+
+emm <- emmeans(mod, ~ Behv | timebin)
+pairs_time <- pairs(emm)
+
+ssss <- as_tibble(summary(pairs_time, infer = TRUE)) %>%
+  mutate(p_adj = p.adjust(p.value, method = "BH"))
+ssss %>% filter(p_adj < 0.05)
+```
+
+
+# E
+```{r}
+# summarises the data to have 3 values per Trial= mean movement during Airpuff, Post-airpuff and the rest
+
+
+
+stat_overall <- Behv_diff2 %>%
+  select(framenumber, x2, y2, pc_x, pc_y, triggerframe, Behv, Trial2, id) %>%
+  mutate(chunks = case_when(
+    between(framenumber, triggerframe, triggerframe + 0.255) ~ "Airpuff",
+    between(framenumber, triggerframe + 0.256, triggerframe + 0.505) ~ "Post_Airpuff",
+    TRUE ~ "Base" # Default case if none of the above conditions are met
+  )) %>%
+  group_by(Trial2, Behv, id, chunks) %>%
+  summarise(diff_x = sum(pc_x), diff_y = sum(pc_y), n = n()) %>%
+  mutate(diff2_x = diff_x / n, diff2_y = diff_y / n) %>%
+  mutate(diff3 = (diff2_x + diff2_y) / 2) %>%
+  ungroup() %>%
+  mutate(Behv = as.factor(Behv), chunks = factor(chunks, levels = c("Base", "Airpuff", "Post_Airpuff")))
+
+
+# I included the interaction term because during exploratory plotting i saw that there is less post_airpuff movement in the A2L case
+
+movmod <- glmer(data = stat_overall, diff3 ~ Behv + chunks + Behv * chunks + (1 | id), family = Gamma(link = "log"))
+movmod0 <- glmer(data = stat_overall, diff3 ~ 1 + (1 | id), family = Gamma(link = "log"))
+anova(movmod, movmod0)
+
+# diagnostic
+# the residuals diagnostic plot is worryesome but the results are very similar when using Rank-sum test
+
+res <- simulateResiduals(fittedModel = movmod, plot = F, refit = F, use.u = T)
+plotQQunif(res, testUniformity = F, testOutliers = F, testDispersion = F)
+
+
+
+# Post hoc
+
+pairs(emmeans(movmod, ~ Behv * chunks, adjust = "fdr"))
+
+
+aaa <- tibble(summary(pairs(emmeans(movmod, ~ Behv * chunks, adjust = "BH")), infer = T))
+aaa %>%
+  mutate(p.value = round(p.value, 4)) %>%
+  arrange(p.value) %>%
+  filter(p.value < 0.05)
+
+# pairs(emmeans(movmod, ~ chunks | Behv))
+
+
+# plot
+
+interactions::cat_plot(movmod, pred = Behv, modx = chunks, interval = TRUE) +
+  theme_bw() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_blank()
+  ) +
+  coord_fixed(ratio = 20)
+ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/movement_fig/E.svg")
+```
+
+
+# F
+```{r}
+# get the post airpuff activity in A2L and divide it by the median
+match <- stat_overall %>%
+  ungroup() %>%
+  filter(Behv == "A2L") %>%
+  filter(chunks == "Post_Airpuff") %>%
+  mutate(
+    cat = cut(diff3,
+      breaks = quantile(diff3, probs = seq(0, 1, by = 1 / 2), na.rm = TRUE),
+      include.lowest = TRUE,
+      labels = c("low", "high")
+    )
+  ) %>%
+  select(Trial2, diff3, cat)
+
+
+# only A2L trials with videos, attach whisking amount categories
+sc <- combcont %>%
+  filter(Trial2 %in% match$Trial2) %>%
+  left_join(match)
+
+# average over trials
+
+
+
+
+
+
+
+t_min <- -0.03
+t_max <- 0.10
+bin_width <- 0.01 # already fixed in data
+
+
+# ----------------------------
+# 1. Trial-level spike rate
+# ----------------------------
+
+trial_rates <- sc %>%
+  group_by(cat, cluster_id2, Trial2, rel_time) %>%
+  summarise(
+    rate = sum(event_count, na.rm = TRUE) / bin_width, # Hz
+    .groups = "drop"
+  )
+
+
+# ----------------------------
+# 2. Average across trials (per neuron)
+# ----------------------------
+
+neuron_rates <- trial_rates %>%
+  group_by(cat, cluster_id2, rel_time) %>%
+  summarise(
+    neuron_rate = mean(rate, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+# ----------------------------
+# 3. Z-score per neuron
+# ----------------------------
+
+neuron_rates_z <- neuron_rates %>%
+  group_by(cat, cluster_id2) %>%
+  mutate(
+    Zscore =
+      (neuron_rate - mean(neuron_rate, na.rm = TRUE)) /
+        sd(neuron_rate, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+
+# ----------------------------
+# 4. Population PSTH
+# ----------------------------
+
+pop_psth <- neuron_rates_z %>%
+  filter(between(rel_time, t_min, t_max)) %>%
+  group_by(cat, rel_time) %>%
+  summarise(
+    mean_z = mean(Zscore, na.rm = TRUE),
+    sd = sd(Zscore, na.rm = TRUE),
+    n = n(), # neurons
+    .groups = "drop"
+  ) %>%
+  mutate(se = sd / sqrt(n))
+
+
+# ----------------------------
+# 5. Plot
+# ----------------------------
+
+ggplot(pop_psth, aes(rel_time, mean_z, col = cat)) +
+  geom_line() +
+  geom_ribbon(
+    aes(
+      ymin = mean_z - se,
+      ymax = mean_z + se,
+      fill = cat
+    ),
+    alpha = 0.4,
+    colour = NA
+  ) +
+  geom_vline(
+    xintercept = 0,
+    col = "darkgrey",
+    linetype = "dashed"
+  ) +
+  theme_bw() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    strip.background = element_blank(),
+    legend.key.size = unit(0.8, "cm")
+  ) +
+  coord_fixed(ratio = 0.03)
+
+
+ggsave("E:/Berlin/figures_v2/Final/Raw_plots_v2/movement_fig/F.svg")
+```
+
+# F_stats
+```{r}
+Test_lh_org <- neuron_rates_z %>%
+  separate_wider_delim(cluster_id2, names = c("x", "Mouse", "Session"), delim = "_", cols_remove = F) %>%
+  unite("id", Mouse, Session) %>%
+  distinct(rel_time, Zscore, cluster_id2, id, cat) %>%
+  filter(between(rel_time, 0.01, 0.04)) %>%
+  group_by(cluster_id2, cat, rel_time, id) %>%
+  summarise(Zscore = mean(Zscore)) %>%
+  distinct(cat, cluster_id2, id, Zscore) %>%
+  ungroup() %>%
+  na.omit() %>%
+  group_by(cat, cluster_id2, id) %>%
+  slice_max(Zscore) %>%
+  ungroup()
+
+# Test_lh_org <- Trialless_lh %>%
+#   distinct(rel_time, Zscore, cluster_id2, id, cat) %>%
+#   filter(between(rel_time, 0.01, 0.04)) %>%
+#   group_by(cluster_id2, cat, rel_time, id) %>%
+#   summarise(Zscore = mean(Zscore)) %>%
+#   distinct(cat, cluster_id2, id, Zscore) %>%
+#   separate_wider_delim(id, names = c("Mouse", "Session"), delim = "_") %>%
+#   ungroup() %>%
+#   na.omit()
+
+# make all values positive to use gamma distribution
+Test_lh <- Test_lh_org %>%
+  mutate(Zscore = Zscore - min(Zscore) + 1) %>%
+  mutate(across(c(id), as.factor))
+
+# i dropped the random intercept for session because of singularity warning, can probably be fixed with more data
+mod_lh <- lme4::glmer(data = Test_lh, Zscore ~ cat + (1 | id), family = Gamma(link = "log"))
+mod0 <- lme4::glmer(data = Test_lh, Zscore ~ 1 + (1 | id), family = Gamma(link = "inverse"))
+
+anova(mod_lh, mod0)
+summary(mod_lh)
+
+# The fit is questionable but  since all other GLMs use the Gamma and this is almost the same data i decided to stick to it
+res <- DHARMa::simulateResiduals(fittedModel = mod_lh, plot = T, refit = F, use.u = T)
+DHARMa::plotQQunif(res, testUniformity = F, testOutliers = F, testDispersion = F)
+
+pairs(emmeans::emmeans(mod_lh, ~cat))
+```
+
+
+
+
+
+ 
