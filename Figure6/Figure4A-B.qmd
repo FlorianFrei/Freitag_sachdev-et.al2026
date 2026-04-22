@@ -220,4 +220,6 @@ arg <- Zeta_Trialless %>%
 mod2 <- glm(data = arg, m ~ Behv * res1 + Mouse, family = Gamma)
 
 pairs(emmeans::emmeans(mod2, ~ Behv | res1))
+
+tibble(summary(pairs(emmeans::emmeans(mod2, ~ Behv | res1)))) %>% mutate(p2 = p.adjust(p.value, method = 'fdr')) %>% mutate(p2 = round(p2,4)) %>% select(contrast,res1,p2)
 ```

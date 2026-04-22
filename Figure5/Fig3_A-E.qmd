@@ -377,11 +377,12 @@ plotQQunif(res, testUniformity = F, testOutliers = F, testDispersion = F)
 pairs(emmeans(movmod, ~ Behv * chunks, adjust = "fdr"))
 
 
-aaa <- tibble(summary(pairs(emmeans(movmod, ~ Behv * chunks, adjust = "BH")), infer = T))
-aaa %>%
-  mutate(p.value = round(p.value, 4)) %>%
-  arrange(p.value) %>%
-  filter(p.value < 0.05)
+aaa <- tibble(summary(pairs(emmeans(movmod, ~ Behv * chunks),adjust = "none"), infer = T))
+aaa %>% mutate(p.value2 = p.adjust(p.value,method = 'fdr')) %>% 
+  mutate(p.value2 = round(p.value2, 4)) %>%
+  arrange(p.value2) %>%
+  filter(p.value2 < 0.05) %>% select(contrast,p.value2)
+
 
 # pairs(emmeans(movmod, ~ chunks | Behv))
 
