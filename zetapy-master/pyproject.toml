@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=77.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zetapy"
+version = "4.1"
+description = "Implementations of the ZETA family of statistical tests."
+readme = "README.md"
+authors = [
+    { name="Jorrit Montijn" },
+    { name="Guido Meijer" },
+    { name="Alexander Heimel" }
+]
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.9"
+dependencies = [
+    "scipy >= 1.1.0",
+    "numpy",
+    "matplotlib"
+]
+classifiers = [
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[tool.setuptools]
+packages = ["zetapy"]
+include-package-data = true

@@ -1,0 +1,10 @@
+build/
+dist/
+*.egg-info/
+
+.idea
+
+#unit_tests/**
+unit_tests/**
+*.pyc
+*.asv
