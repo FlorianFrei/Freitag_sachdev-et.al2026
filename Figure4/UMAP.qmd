@@ -7,6 +7,8 @@ editor_options:
 ---
 
 #umap
+#Please note that UMAP uses RNG so its unliekly to get the same Manifold and clustering as seen in the Paper
+# we ran this code many times and the shape of the Manifold is consitently ring-like without obvious grouping. 
 
 
 ```{r}
