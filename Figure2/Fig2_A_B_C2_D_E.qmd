@@ -233,13 +233,13 @@ add_layers <- function(Data, depthpath) {
       between(dist_surf, 500, 750) ~ "L5A",
       between(dist_surf, 750, 1050) ~ "L5B",
       between(dist_surf, 1050, 1210) ~ "L6",
-      .default = "WTF"
+      .default = "bad"
     )) %>%
     mutate(Layer = case_when(
       between(dist_surf, -500, -20) ~ "out",
       between(dist_surf, -20, 500) ~ "L2/3",
       between(dist_surf, 500, 1210) ~ "L5",
-      .default = "WTF"
+      .default = "bad"
     ))
   Layerd
 }
@@ -335,7 +335,7 @@ PTT_plot_data <- PTT_plot_data %>% mutate(newgroup = case_when(
   newgroup == "FS" ~ "FS",
   newgroup == "good" ~ "regular",
   newgroup == "mua" ~ "inverted",
-  .default = "WTF"
+  .default = "bad"
 ))
 
 # plot mean + SEM
@@ -450,7 +450,7 @@ ggplot(pdata %>% mutate(response = response + PPT_min - 1, asymp.LCL = asymp.LCL
   newgroup == "FS" ~ "FS",
   newgroup == "good" ~ "RS",
   newgroup == "mua" ~ "inverted",
-  .default = "Fuck"
+  .default = "bad"
 )) %>% mutate(newgroup = factor(newgroup, levels = c("FS", "inverted", "RS"))), aes(x = newgroup, y = response)) +
   geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, linewidth = 1.3) +
   geom_point() +
@@ -467,12 +467,12 @@ ggplot(pdata %>% mutate(response = response + PPT_min - 1, asymp.LCL = asymp.LCL
       group1 == "FS" ~ "FS",
       group1 == "good" ~ "RS",
       group1 == "mua" ~ "inverted",
-      .default = "WTF"
+      .default = "bad"
     )) %>% mutate(group2 = case_when(
       group2 == "FS" ~ "FS",
       group2 == "good" ~ "RS",
       group2 == "mua" ~ "inverted",
-      .default = "WTF"
+      .default = "bad"
     )) %>% mutate(y.position = asymp.UCL + 0.3, y.position = ifelse(group1 == "FS" & group2 == "inverted", y.position + 0.4, y.position)),
     label = "psig",
     xmin = "group1", xmax = "group2", y.position = "y.position", size = 8, bracket.size = 1
@@ -517,15 +517,11 @@ Layerd_stats <- Layerd_stats_org %>%
 
 # fit and test the model
 
-Layerd_mod <- glmer(data = Layerd_stats, Zscore ~ Behv + Layer + (1 | Mouse) + (1 | Mouse:Session), family = Gamma(link = "log"))
+Layerd_mod <- glmer(data = Layerd_stats, Zscore ~ Behv + Layer + Behv:Layer + (1 | Mouse) + (1 | Mouse:Session), family = Gamma(link = "inverse"))
 Layerd_Null <- glmer(data = Layerd_stats, Zscore ~ 1 + (1 | Mouse) + (1 | Mouse:Session), family = Gamma(link = "inverse"))
 anova(Layerd_mod, Layerd_Null)
 
-# Layerd_mod <- glmer(data = Layerd_stats, Zscore ~ Behv + Layer + (1 | Mouse) + (1 | Mouse:Session), family = Gamma(link = "inverse"))
-# emmeans(Layerd_mod, ~ Layer | Behv, type = "response")
 
-
-Layerd_mod <- glmer(data = Layerd_stats, Zscore ~ Behv + Layer + Behv:Layer + (1 | Mouse) + (1 | Mouse:Session), family = Gamma(link = "inverse"))
 emmeans(Layerd_mod, ~ Layer | Behv, type = "response")
 
 
@@ -633,7 +629,7 @@ PTT_plot_data <- PTT_plot_data %>% mutate(newgroup = case_when(
   newgroup == "FS" ~ "FS",
   newgroup == "good" ~ "regular",
   newgroup == "mua" ~ "inverted",
-  .default = "WTF"
+  .default = "bad"
 ))
 
 # plot mean + SEM

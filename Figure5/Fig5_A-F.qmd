@@ -296,12 +296,6 @@ ggplot(plot_df2, aes(bin_time, percm_bc, col = Behv)) +
 
 #D stats
 ```{r}
-# here i cannot use the trick from the neuronal data of taking the max in a small window. with this data it had a huge effect on the significance.
-
-# statsdata <- comb_coord %>%
-# filter(Behv != "W2T", chunks == "Post_Airpuff")  %>% group_by(Trial2,id,Behv) %>% summarise(g = mean(diff3))
-
-
 
 
 statsdata <- comb_coord %>%
@@ -557,13 +551,12 @@ Test_lh <- Test_lh_org %>%
   mutate(across(c(id), as.factor))
 
 # i dropped the random intercept for session because of singularity warning, can probably be fixed with more data
-mod_lh <- lme4::glmer(data = Test_lh, Zscore ~ cat + (1 | id), family = Gamma(link = "log"))
+mod_lh <- lme4::glmer(data = Test_lh, Zscore ~ cat + (1 | id), family = Gamma(link = "inverse"))
 mod0 <- lme4::glmer(data = Test_lh, Zscore ~ 1 + (1 | id), family = Gamma(link = "inverse"))
 
 anova(mod_lh, mod0)
 summary(mod_lh)
 
-# The fit is questionable but  since all other GLMs use the Gamma and this is almost the same data i decided to stick to it
 res <- DHARMa::simulateResiduals(fittedModel = mod_lh, plot = T, refit = F, use.u = T)
 DHARMa::plotQQunif(res, testUniformity = F, testOutliers = F, testDispersion = F)
 

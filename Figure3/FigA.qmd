@@ -36,13 +36,13 @@ add_layers <- function(Data, depthpath) {
       between(dist_surf, 500, 750) ~ "L5A",
       between(dist_surf, 750, 1050) ~ "L5B",
       between(dist_surf, 1050, 1210) ~ "L6",
-      .default = "WTF"
+      .default = "bad"
     )) %>%
     mutate(Layer = case_when(
       between(dist_surf, -500, -20) ~ "out",
       between(dist_surf, -20, 500) ~ "L2/3",
       between(dist_surf, 500, 1210) ~ "L5",
-      .default = "WTF"
+      .default = "bad"
     ))
   Layerd
 }
@@ -217,7 +217,7 @@ n_cells %>%
   )
 ggsave("F:/Berlin/figures_v2/Final/Raw_plots_v2/moveDir_fig/A_A2L_pie.svg")
 ```
-`
+
 
 # UA Plots
 

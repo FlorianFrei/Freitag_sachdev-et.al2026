@@ -14,18 +14,18 @@ library(tidyverse)
 library(umap)
 library(patchwork)
 
-zeta <- read_csv("F:/Florian_paper/Florian/Aligned_Data/Analysable_data/zeta_dir.csv")
-Trialless <- read_csv("F:/Florian_paper/Florian/Aligned_Data/Analysable_data/wrangled_Data/R_outputs/Trialless.csv")
+zeta <- read_csv("H:/Florian_paper/Florian/Aligned_Data/Analysable_data/zeta_dir.csv")
+Trialless <- read_csv("H:/Florian_paper/Florian/Aligned_Data/Analysable_data/wrangled_Data/R_outputs/Trialless.csv")
 
 list_of_ptt <- list.files(
-  path = "F:/Florian_paper/Florian/Aligned_Data/Analysable_data/peak_to_trough_times",
+  path = "H:/Florian_paper/Florian/Aligned_Data/Analysable_data/peak_to_trough_times",
   pattern = "\\.csv$",
   full.names = TRUE
 )
 ptt <- read_csv(list_of_ptt, id = "id2") %>% as_tibble()
 
 # keys to match the names of the Neruopixels data to the shortfrom M{id}_{session}
-translator <- read_csv2("F:/Florian_paper/Florian/Aligned_Data/Analysable_data/translator.csv")
+translator <- read_csv2("H:/Florian_paper/Florian/Aligned_Data/Analysable_data/translator.csv")
 
 ptt2 <- ptt %>%
   separate(Original_Index, into = c("old", "second_part"), sep = "(?=_row)", extra = "merge", remove = FALSE) %>%
@@ -95,11 +95,11 @@ AA.pca <- pca$x[, 1:5] # Top 5 PCs
 # 2. K-means Clustering
 # Set your desired number of clusters (e.g., k = 5)
 k_centers <- 4
-set.seed(404) # For reproducibility
+set
 cl <- kmeans(AA.pca, centers = k_centers, nstart = 25)
 
 # 3. Dimensionality Reduction for Visualization (Existing)
-AA.umap <- umap(AA.data, n_components = 2)
+AA.umap <- umap(AA.pca, n_components = 2)
 
 # 4. Prepare Plotting Data
 plotda <- tibble(
@@ -126,7 +126,7 @@ filt_kmean <- plotda %>%
 counts_df <- filt_kmean %>%
   count(kmc)
 
-Trialless %>%
+Trialless %>% filter(Behv == "A2L") %>% 
   filter(cluster_id2 %in% zeta_u) %>%
   left_join(filt_kmean, by = "cluster_id2") %>%
   filter(between(rel_time, -0.05, 1)) %>%
@@ -165,7 +165,7 @@ n_cat <- Trialless %>%
   left_join(filt_kmean, by = "cluster_id2") %>%
   distinct(cluster_id2, kmc) %>%
   count(kmc)
-p2 <- Trialless %>%
+p2 <- Trialless %>% filter(Behv == "A2L") %>% 
   filter(cluster_id2 %in% zeta_u) %>%
   left_join(filt_kmean, by = "cluster_id2") %>%
   filter(between(rel_time, 0, 1)) %>%
@@ -173,9 +173,9 @@ p2 <- Trialless %>%
   group_by(rel_time, kmc, cluster_id2) %>%
   summarise(Zscore = mean(Zscore)) %>%
   left_join(n_cat) %>%
-  na.omit() %>%
+  na.omit() %>% distinct(rel_time,kmc,Zscore,n) %>% 
   group_by(rel_time, kmc) %>%
-  summarise(m_Zscore = mean(Zscore), sd = sd(Zscore), sem = sd / sqrt(n), .groups = "drop") %>%
+  summarise(m_Zscore = mean(Zscore), sd = sd(Zscore), sem = sd / sqrt(first(n)), .groups = "drop") %>%
   distinct(rel_time, kmc, m_Zscore, sd, sem) %>%
   ggplot(aes(rel_time, m_Zscore, )) +
   geom_line(aes(col = as.factor(kmc)), linewidth = 1.2) +
@@ -208,6 +208,11 @@ p2 <- p2 +
 p2
 
 pp <- (p1 + p2) + plot_layout(, widths = c(1.8, 1))
+
+#pp_old<- pp
+
+pp
+pp_old #seed 404
 
 ggsave("F:/Berlin/figures_v2/Final/Raw_plots_v2/UMAP_fig/A_2.svg", width = 16, height = 9)
 ```
@@ -339,81 +344,296 @@ pp2
 
 
 
-# all units, sep Behv
+
+#validation
+
+
 ```{r}
-zeta_u <- zeta2 %>%
-  filter(Behv == "A2L") %>%
-  filter(p_value < 0.05) %>%
-  pull(cluster_id)
-AA <- Trialless %>%
-  filter(between(rel_time, -0.05, 1)) %>%
-  group_by(rel_time, cluster_id2) %>%
-  summarise(Zscore = mean(Zscore)) %>%
+# Assumes zeta_u, AA.data, AA.labels, and pca were created above.
+# `pca` must have been fitted as:
+# pca <- prcomp(AA.data, center = FALSE, scale. = FALSE)
+
+library(tidyverse)
+
+time_window <- c(0, 0.5)   # Same window used for PCA/UMAP
+pc_threshold <- 0.95
+n_folds <- 10
+
+set.seed(404)
+
+
+
+#recalculate features to have the same max duration as the PCA input, this essentially changes nothing
+
+int100 <- Trialless %>%
+  filter(
+    cluster_id2 %in% zeta_u,
+    Behv == "A2L",
+    between(rel_time, 0, 0.1)
+  ) %>%
   group_by(cluster_id2) %>%
-  mutate(Zscore = zoo::rollmean.default(Zscore, 20, "extend")) %>%
-  ungroup() %>%
+  summarise(
+    int100 = sum(Zscore) * 0.01,
+    .groups = "drop"
+  )
+
+intsus <- Trialless %>%
+  filter(
+    cluster_id2 %in% zeta_u,
+    Behv == "A2L",
+    between(rel_time, 0.1, 0.4)
+  ) %>%
   group_by(cluster_id2) %>%
-  # mutate(norm = (Zscore - min(Zscore)) / (max(Zscore) - min(Zscore))) %>%
-  mutate(norm = Zscore) %>%
-  ungroup() %>%
-  select(-Zscore) %>%
-  pivot_wider(names_from = rel_time, values_from = norm)
+  summarise(
+    intsus = sum(Zscore) * 0.01,
+    .groups = "drop"
+  )
 
+ttp <- Trialless %>%
+  filter(
+    cluster_id2 %in% zeta_u,
+    Behv == "A2L",
+    between(rel_time, time_window[1], time_window[2])
+  ) %>%
+  group_by(cluster_id2) %>%
+  slice_max(
+    order_by = Zscore,
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+  summarise(
+    ttp = first(rel_time),
+    .groups = "drop"
+  )
 
+pma <- Trialless %>%
+  filter(
+    cluster_id2 %in% zeta_u,
+    Behv == "A2L",
+    between(rel_time, time_window[1], time_window[2])
+  ) %>%
+  group_by(cluster_id2) %>%
+  summarise(
+    pma = max(Zscore),
+    .groups = "drop"
+  )
 
-AA <- AA %>% na.omit()
-AA.data <- AA %>% select(-cluster_id2)
-AA.data <- t(scale(t(AA.data)))
+features <- int100 %>%
+  left_join(intsus, by = "cluster_id2") %>%
+  left_join(ttp, by = "cluster_id2") %>%
+  left_join(pma, by = "cluster_id2")
 
-AA.labels <- AA %>% select(cluster_id2)
+feature_names <- c("int100", "intsus", "ttp", "pma")
 
-# 1. Dimensionality Reduction (Existing)
-pca <- prcomp(AA.data, center = FALSE, scale. = FALSE)
-plot(cumsum(pca$sdev[1:10]^2 / sum(pca$sdev[1:10]^2)))
-AA.pca <- pca$x[, 1:4] # Top 4 PCs
+# Match features to the existing PCA/PSTH rows
+analysis_ids <- AA.labels %>%
+  left_join(features, by = "cluster_id2") %>%
+  drop_na(all_of(feature_names))
 
-# 2. K-means Clustering
-# Set your desired number of clusters (e.g., k = 5)
-k_centers <- 6
-set.seed(404) # For reproducibility
-cl <- kmeans(AA.pca, centers = k_centers, nstart = 25)
+row_keep <- match(analysis_ids$cluster_id2, AA.labels$cluster_id2)
 
-# 3. Dimensionality Reduction for Visualization (Existing)
-AA.umap <- umap(AA.data, n_components = 2)
+AA.model <- AA.data[row_keep, , drop = FALSE]
+X <- analysis_ids %>%
+  select(all_of(feature_names)) %>%
+  as.matrix()
 
-# 4. Prepare Plotting Data
-plotda <- tibble(
-  UMAP1 = AA.umap$layout[, 1],
-  UMAP2 = AA.umap$layout[, 2],
-  cluster = factor(cl$cluster), # K-means cluster assignment
-  cluster_id2 = AA.labels$cluster_id2
+stopifnot(!anyNA(row_keep))
+
+# Use the PCA already fitted above.
+# This is valid provided all AA.data rows have the four feature values.
+stopifnot(nrow(AA.model) == nrow(AA.data))
+
+pc_prop_var <- pca$sdev^2 / sum(pca$sdev^2)
+n_pc <- which(cumsum(pc_prop_var) >= pc_threshold)[1]
+
+pc_scores <- pca$x[, seq_len(n_pc), drop = FALSE]
+pc_rotation <- pca$rotation[, seq_len(n_pc), drop = FALSE]
+
+X_scaled <- scale(X) %>%
+  as.data.frame()
+
+# ------------------------------------------------------------
+# In-sample reconstruction from the four features
+# ------------------------------------------------------------
+
+fitted_scores <- map_dfc(seq_len(n_pc), function(j) {
+# see notes below about using a LM here 
+  fit <- lm(
+    pc_scores[, j] ~ int100 + intsus + ttp + pma,
+    data = X_scaled
+  )
+
+  tibble(PC = fitted(fit))
+}) %>%
+  as.matrix()
+
+psth_pred_in_sample <- fitted_scores %*% t(pc_rotation)
+
+R2_in_sample <- 1 -
+  sum((AA.model - psth_pred_in_sample)^2) / sum(AA.model^2)
+
+# ------------------------------------------------------------
+# Feature-alone and unique contributions, in-sample
+# ------------------------------------------------------------
+
+# This essentially shows that there is a big overlap in the features because the Feature alone is often way bigger than their unqiue contribution
+reconstruction_R2 <- function(predictors) {
+
+  fitted_scores <- map_dfc(seq_len(n_pc), function(j) {
+
+    fit <- lm(
+      reformulate(predictors, response = "score"),
+      data = bind_cols(
+        X_scaled,
+        tibble(score = pc_scores[, j])
+      )
+    )
+
+    tibble(PC = fitted(fit))
+  }) %>%
+    as.matrix()
+
+  psth_pred <- fitted_scores %*% t(pc_rotation)
+
+  1 - sum((AA.model - psth_pred)^2) / sum(AA.model^2)
+}
+
+feature_results <- map_dfr(feature_names, function(feature) {
+
+  R2_alone <- reconstruction_R2(feature)
+
+  R2_without <- reconstruction_R2(
+    setdiff(feature_names, feature)
+  )
+
+  tibble(
+    feature = feature,
+    variance_explained_alone_percent = 100 * R2_alone,
+    unique_variance_explained_percent =
+      100 * (R2_in_sample - R2_without)
+  )
+}) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 1)))
+
+# ------------------------------------------------------------
+# 10-fold cross-validation
+# PCA and feature scaling are re-fitted within each training set.
+# ------------------------------------------------------------
+
+set.seed(404)
+
+n_neurons <- nrow(AA.model)
+fold_id <- sample(rep(seq_len(n_folds), length.out = n_neurons))
+
+psth_pred_cv <- matrix(
+  NA_real_,
+  nrow = nrow(AA.model),
+  ncol = ncol(AA.model)
 )
 
-# Visualize Clusters in UMAP space
-plotda <- plotda %>% mutate(cluster = as.factor(cluster))
-ggplot(plotda, aes(UMAP1, UMAP2, col = cluster)) +
-  geom_point(size = 1, alpha = 0.6) +
-  theme_minimal() +
-  labs(title = "K-means Clusters in UMAP Space")
+for (fold in seq_len(n_folds)) {
 
+  train_idx <- which(fold_id != fold)
+  test_idx <- which(fold_id == fold)
 
-plotda %>%
-  left_join(zeta2 %>% filter(p_value < 0.05) %>% select(Behv, cluster_id2 = cluster_id)) %>%
-  ggplot(aes(UMAP1, UMAP2)) +
-  geom_point() +
-  facet_wrap(~Behv) +
-  theme_void()
+  psth_train <- AA.model[train_idx, , drop = FALSE]
+  psth_test <- AA.model[test_idx, , drop = FALSE]
 
-plotda %>%
-  left_join(zeta2 %>% filter(p_value < 0.05) %>% select(Behv, cluster_id2 = cluster_id)) %>%
-  group_by(Behv) %>%
-  count()
-zeta2 %>%
-  filter(p_value < 0.05) %>%
-  group_by(Behv) %>%
-  count()
+  X_train <- scale(X[train_idx, , drop = FALSE])
+
+  X_test <- scale(
+    X[test_idx, , drop = FALSE],
+    center = attr(X_train, "scaled:center"),
+    scale = attr(X_train, "scaled:scale")
+  )
+
+  X_train <- as.data.frame(X_train)
+  X_test <- as.data.frame(X_test)
+
+  pca_train <- prcomp(
+    psth_train,
+    center = FALSE,
+    scale. = FALSE
+  )
+
+  prop_var_train <- pca_train$sdev^2 / sum(pca_train$sdev^2)
+
+  n_pc_train <- which(
+    cumsum(prop_var_train) >= pc_threshold
+  )[1]
+
+  predicted_scores <- map_dfc(seq_len(n_pc_train), function(j) {
+
+    fit <- lm(
+      pca_train$x[, j] ~ int100 + intsus + ttp + pma,
+      data = X_train
+    )
+
+    tibble(PC = predict(fit, newdata = X_test))
+  }) %>%
+    as.matrix()
+
+  psth_pred_cv[test_idx, ] <- predicted_scores %*%
+    t(pca_train$rotation[, seq_len(n_pc_train), drop = FALSE])
+}
+
+R2_cv <- 1 -
+  sum((AA.model - psth_pred_cv)^2) / sum(AA.model^2)
+
+# ------------------------------------------------------------
+# Results
+# ------------------------------------------------------------
+
+cat(
+  "\nPSTH PCA reconstruction\n",
+  "------------------------\n",
+  "Neurons: ", n_neurons, "\n",
+  "PCs retained: ", n_pc, "\n",
+  "PSTH variance retained by PCs: ",
+  round(100 * sum(pc_prop_var[seq_len(n_pc)]), 1), "%\n",
+  "In-sample reconstruction R2: ",
+  round(100 * R2_in_sample, 1), "%\n",
+  "10-fold cross-validated reconstruction R2: ",
+  round(100 * R2_cv, 1), "%\n\n",
+  sep = ""
+)
+
+feature_results
+
+# Optional feature-contribution plot
+feature_results %>%
+  pivot_longer(
+    cols = c(
+      variance_explained_alone_percent,
+      unique_variance_explained_percent
+    ),
+    names_to = "measure",
+    values_to = "variance_explained"
+  ) %>%
+  mutate(
+    measure = recode(
+      measure,
+      variance_explained_alone_percent = "Feature alone",
+      unique_variance_explained_percent = "Unique contribution"
+    )
+  ) %>%
+  ggplot(aes(feature, variance_explained, fill = measure)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  coord_flip() +
+  labs(
+    x = NULL,
+    y = "Variance in normalized PSTHs explained (%)",
+    fill = NULL
+  ) +
+  theme_classic()
 ```
-# color clusters bz integral
 
-```{r}
-```
+
+
+
+# I tried the same with GAM,
+# at least PC1 shows strong non-linearity
+# But GAM only increases R2 slightly (0.548 vs 0.578)
+# since this is a secondary analsis and the cross-fold variation is stable, simple LM seems solid enough
+
+
